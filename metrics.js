@@ -214,6 +214,62 @@
     }).sort((a, b) => (a.retired - b.retired) || ((b.last ? t(b.last) : 0) - (a.last ? t(a.last) : 0)));
   }
 
+  /* ---------- 心拍ゾーン（心拍予備量 = カルボーネン法） ---------- */
+  const ZONES = [
+    { n: 'Z1', name: 'リカバリー', d: 'ごく楽。ウォームアップや疲労抜き' },
+    { n: 'Z2', name: '有酸素ベース', d: '会話できる楽さ。持久力の土台を作る' },
+    { n: 'Z3', name: 'テンポ', d: 'ややきつい。マラソンペース前後' },
+    { n: 'Z4', name: '閾値', d: 'きつい。ハーフ〜10kmのレースペース' },
+    { n: 'Z5', name: '最大', d: '非常にきつい。インターバルの疾走区間' },
+  ];
+  const ZONE_F = [0.6, 0.7, 0.8, 0.9];
+  const zoneBpm = P => ZONE_F.map(f => Math.round(P.rest + f * (P.max - P.rest)));
+  function zoneOf(hr, bounds) { let z = 0; while (z < 4 && hr >= bounds[z]) z++; return z; }
+  // hz.h（2bpm ごとの滞在秒）→ ゾーンごとの秒
+  function zoneSec(hz, P) {
+    const out = [0, 0, 0, 0, 0];
+    if (!hz || !hz.h) return out;
+    const b = zoneBpm(P);
+    Object.keys(hz.h).forEach(k => { out[zoneOf(+k + 1, b)] += hz.h[k]; });
+    return out;
+  }
+  // 心拍の推移 [[秒, 心拍, 距離m]] → 一覧用のまとめ（Apps Script の hrSummary_ と同じ計算）
+  function hrSummary(p) {
+    if (!p || !p.length) return null;
+    const h = {};
+    for (let i = 1; i < p.length; i++) {
+      const dt = p[i][0] - p[i - 1][0];
+      if (dt <= 0 || dt > 120 || !p[i][1]) continue;
+      const k = String(Math.floor(p[i][1] / 2) * 2);
+      h[k] = (h[k] || 0) + dt;
+    }
+    let dr = null;
+    const T = p[p.length - 1][0];
+    if (T >= 1800) {
+      const s0 = T * 0.1, mid = s0 + (T - s0) / 2;
+      const half = (a, b) => {
+        const q = p.filter(x => x[0] >= a && x[0] <= b);
+        if (q.length < 3) return null;
+        const hr = q.reduce((s, x) => s + x[1], 0) / q.length;
+        return (q[q.length - 1][2] - q[0][2]) / (q[q.length - 1][0] - q[0][0]) / hr;
+      };
+      const a = half(s0, mid), b = half(mid, T);
+      if (a && b) dr = Math.round((a - b) / a * 1000) / 10;
+    }
+    return { h: h, dr: dr };
+  }
+  // 推移からペース（秒/km）を前後 window 秒の平均で
+  function paceStream(p, win) {
+    win = win || 60;
+    return p.map((x, i) => {
+      let j = i, k = i;
+      while (j > 0 && x[0] - p[j - 1][0] <= win / 2) j--;
+      while (k < p.length - 1 && p[k + 1][0] - x[0] <= win / 2) k++;
+      const dd = p[k][2] - p[j][2], dt = p[k][0] - p[j][0];
+      return dd > 5 && dt > 0 ? dt / dd * 1000 : null;
+    });
+  }
+
   function rolling(values, n) {
     return values.map((_, i) => {
       const w = values.slice(Math.max(0, i - n + 1), i + 1).filter(v => v != null);
@@ -225,5 +281,6 @@
     DAY, isRun, t, dayKey, startOfDay, startOfWeek, startOfMonth, paceSec, fmtPace, fmtDur, fmtKm,
     hrParams, hrr, vdot, predict, hrVo2, raceVdot, fitnessSeries, scoreAt, efficiency, trimp, loadSeries, formLabel,
     sumRuns, buckets, PR_DIST, prs, shoes, rolling, EFFORT_M,
+    ZONES, zoneBpm, zoneOf, zoneSec, hrSummary, paceStream,
   };
 })();

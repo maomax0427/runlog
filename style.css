@@ -251,3 +251,23 @@ input, select { font: inherit; color: inherit; }
 .welcome h2 { margin: 6px 0 6px; font-size: 20px; }
 .welcome p { color: var(--sub); font-size: 13.5px; margin: 0 0 16px; line-height: 1.6; }
 .welcome .btn + .btn { margin-top: 8px; }
+
+/* ---------- 心拍ゾーン（Z1→Z5 を明るい→濃いの一色で） ---------- */
+:root { --z0: #FAD3BD; --z1: #F4A47A; --z2: #EA7440; --z3: #C9501C; --z4: #8E3310; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --z0: #5C2C18; --z1: #93421F; --z2: #D35B2B; --z3: #F58A55; --z4: #FFC09C; } }
+.chart .bar.s0, .zbar .s0, .zs.s0 { fill: var(--z0); background: var(--z0); }
+.chart .bar.s1, .zbar .s1, .zs.s1 { fill: var(--z1); background: var(--z1); }
+.chart .bar.s2, .zbar .s2, .zs.s2 { fill: var(--z2); background: var(--z2); }
+.chart .bar.s3, .zbar .s3, .zs.s3 { fill: var(--z3); background: var(--z3); }
+.chart .bar.s4, .zbar .s4, .zs.s4 { fill: var(--z4); background: var(--z4); }
+.chart .band { opacity: .16; }
+.chart .band.s0 { fill: var(--z0); } .chart .band.s1 { fill: var(--z1); } .chart .band.s2 { fill: var(--z2); } .chart .band.s3 { fill: var(--z3); } .chart .band.s4 { fill: var(--z4); }
+.zs { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.legend .zs { width: 10px; height: 10px; }
+.zbar { display: flex; gap: 2px; height: 14px; border-radius: 4px; overflow: hidden; margin: 2px 0 10px; }
+.zbar i { display: block; min-width: 2px; }
+.zrow { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 6px 0; font-size: 13.5px; border-top: 1px solid var(--line); }
+.zrow small { color: var(--sub); font-size: 11.5px; margin-left: 6px; }
+.zrow .num { font-weight: 800; white-space: nowrap; }
+.drift { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 13px; }
+.drift b { font-size: 18px; font-variant-numeric: tabular-nums; }

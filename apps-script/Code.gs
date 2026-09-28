@@ -23,10 +23,13 @@ const GEAR_SHEET = 'gear';
 const CFG_SHEET = 'config';
 const ACT_HEAD = ['id', '日時', '名前', '種別', '距離(km)', '移動時間(秒)', '経過時間(秒)', 'ペース(/km)',
   '獲得標高(m)', '平均心拍', '最大心拍', 'ケイデンス(spm)', 'gearId', '靴', 'トレッドミル', 'ワークアウト種別',
-  '相対的努力', 'カロリー', '詳細', 'splits', 'efforts'];
+  '相対的努力', 'カロリー', '詳細', 'splits', 'efforts', 'hrStream'];
 const GEAR_HEAD = ['gearId', '名前', '距離(km)', '引退', 'メイン'];
 const RUN_TYPES = { Run: 1, TrailRun: 1, VirtualRun: 1 };
-const DETAIL_PER_SYNC = 25;   // 1回の同期で詳細（ラップ・ベスト記録）を取りに行く件数。Strava の上限（15分100回）対策
+// 1回の同期で詳細（ラップ・ベスト記録）と心拍の推移を取りに行くリクエスト数。
+// Strava の上限（15分100回・1日1000回）に1時間ごとの実行でも収まるように
+const REQ_PER_SYNC = 30;
+const STREAM_POINTS = 400;   // 心拍の推移は最大この点数に間引いて保存
 const API = 'https://www.strava.com/api/v3';
 
 const props_ = () => PropertiesService.getScriptProperties();
@@ -44,6 +47,7 @@ function sheet_(name, head) {
 }
 function actSheet_() {
   const sh = sheet_(ACT_SHEET, ACT_HEAD);
+  if (sh.getLastColumn() < ACT_HEAD.length) sh.getRange(1, 1, 1, ACT_HEAD.length).setValues([ACT_HEAD]).setFontWeight('bold');   // 列が増えたとき
   sh.getRange('A:A').setNumberFormat('@');
   sh.getRange('B:B').setNumberFormat('yyyy-mm-dd hh:mm');
   sh.getRange('M:M').setNumberFormat('@');
@@ -118,6 +122,12 @@ function doPost(e) {
       case 'resync': {
         const r = withLock_(() => sync_(true));
         return json_(Object.assign({ ok: true, sync: r }, load_()));
+      }
+      case 'stream': {   // 1本のランの心拍の推移（詳細画面用）
+        const sh = actSheet_();
+        const f = sh.getRange('A:A').createTextFinder(String(req.id)).matchEntireCell(true).findNext();
+        const v = f ? sh.getRange(f.getRow(), ACT_HEAD.length).getValue() : '';
+        return json_({ ok: true, id: String(req.id), hrs: v && v !== '-' ? JSON.parse(v) : null });
       }
       case 'saveConfig':
         cfgSheet_().getRange('A2').setValue(JSON.stringify(req.config || {}));
@@ -215,7 +225,7 @@ function actRow_(a, gearNames) {
     Math.round(km * 1000) / 1000, a.moving_time || 0, a.elapsed_time || 0, paceStr_(a.moving_time, km),
     r1_(a.total_elevation_gain), r1_(a.average_heartrate), a.max_heartrate || '', cad,
     a.gear_id || '', gearNames[a.gear_id] || '', !!a.trainer, a.workout_type == null ? '' : a.workout_type,
-    a.suffer_score == null ? '' : a.suffer_score, '', false, '', ''];
+    a.suffer_score == null ? '' : a.suffer_score, '', false, '', '', a.has_heartrate ? '' : '-'];
 }
 
 function gearNames_() {
@@ -274,6 +284,7 @@ function sync_(full) {
     if (byId[id] != null) {
       const old = rows[byId[id]];
       row[17] = old[17]; row[18] = old[18]; row[19] = old[19]; row[20] = old[20];   // 詳細は残す
+      if (old[21]) row[21] = old[21];
       rows[byId[id]] = row;
     } else {
       byId[id] = rows.length; rows.push(row); added++;
@@ -285,34 +296,100 @@ function sync_(full) {
   // 靴の名前を最新に
   out.forEach(r => { if (r[12]) r[13] = names[r[12]] || r[13]; });
 
-  // 詳細（ラップ・ベスト記録・カロリー）を新しいランから少しずつ
-  const pending = out.map((r, i) => i).filter(i => RUN_TYPES[out[i][3]] && out[i][18] !== true)
-    .sort((a, b) => out[b][1] - out[a][1]).slice(0, DETAIL_PER_SYNC);
-  let detailed = 0, note = '';
-  for (let k = 0; k < pending.length; k++) {
-    const r = out[pending[k]];
-    try {
-      const d = get_('/activities/' + r[0], token);
-      r[17] = d.calories ? Math.round(d.calories) : '';
-      r[18] = true;
-      r[19] = JSON.stringify((d.splits_metric || []).map(s => [Math.round(s.distance), s.moving_time, r1_(s.average_heartrate), r1_(s.elevation_difference)]));
-      r[20] = JSON.stringify((d.best_efforts || []).map(b => [b.name, b.moving_time, b.pr_rank || 0]));
-      detailed++;
-    } catch (err) {
-      if (err.rate) { note = err.message; break; }
-      r[18] = true;   // 取れないもの（削除済み等）は飛ばす
+  // 詳細（ラップ・ベスト記録・カロリー）と心拍の推移を、新しいランから少しずつ
+  const needDetail = r => RUN_TYPES[r[3]] && r[18] !== true;
+  const needStream = r => RUN_TYPES[r[3]] && r[21] === '' && Number(r[9]) > 0;
+  const pending = out.filter(r => needDetail(r) || needStream(r)).sort((a, b) => b[1] - a[1]);
+  let detailed = 0, streams = 0, reqs = 0, note = '';
+  for (let k = 0; k < pending.length && reqs < REQ_PER_SYNC && !note; k++) {
+    const r = pending[k];
+    if (needDetail(r)) {
+      reqs++;
+      try {
+        const d = get_('/activities/' + r[0], token);
+        r[17] = d.calories ? Math.round(d.calories) : '';
+        r[18] = true;
+        r[19] = JSON.stringify((d.splits_metric || []).map(s => [Math.round(s.distance), s.moving_time, r1_(s.average_heartrate), r1_(s.elevation_difference)]));
+        r[20] = JSON.stringify((d.best_efforts || []).map(b => [b.name, b.moving_time, b.pr_rank || 0]));
+        detailed++;
+      } catch (err) {
+        if (err.rate) { note = err.message; break; }
+        r[18] = true;   // 取れないもの（削除済み等）は飛ばす
+      }
+    }
+    if (needStream(r) && reqs < REQ_PER_SYNC) {
+      reqs++;
+      try { r[21] = stream_(r[0], token); streams++; } catch (err) {
+        if (err.rate) { note = err.message; break; }
+        r[21] = '-';
+      }
     }
   }
 
   out.sort((a, b) => a[1] - b[1]);
   if (last > 1) sh.getRange(2, 1, last - 1, W).clearContent();
   if (out.length) sh.getRange(2, 1, out.length, W).setValues(out);
-  const leftover = out.filter(r => RUN_TYPES[r[3]] && r[18] !== true).length;
+  const leftover = out.filter(r => needDetail(r) || needStream(r)).length;
   props_().setProperty('LAST_SYNC', new Date().toISOString());
-  return { added: added, removed: removed, detailed: detailed, detailPending: leftover, note: note };
+  return { added: added, removed: removed, detailed: detailed, streams: streams, detailPending: leftover, note: note };
+}
+
+/**
+ * 心拍の推移（Apple Watch などの心拍計の記録）を取得して間引く。
+ * 保存形式: [[経過秒, 心拍, 距離m], ...]。心拍が無ければ '-'
+ */
+function stream_(id, token) {
+  const s = get_('/activities/' + id + '/streams?keys=time,heartrate,distance&key_by_type=true', token);
+  const t = s.time && s.time.data, hr = s.heartrate && s.heartrate.data, d = s.distance && s.distance.data;
+  if (!t || !hr || !hr.length) return '-';
+  const step = Math.max(5, Math.ceil(t[t.length - 1] / STREAM_POINTS));
+  const out = [];
+  let b = 0, sum = 0, n = 0, lastI = 0;
+  for (let i = 0; i < t.length; i++) {
+    const k = Math.floor(t[i] / step);
+    if (k !== b && n) { out.push([t[lastI], Math.round(sum / n), d ? Math.round(d[lastI]) : 0]); sum = 0; n = 0; }
+    b = k;
+    if (hr[i] > 0) { sum += hr[i]; n++; }
+    lastI = i;
+  }
+  if (n) out.push([t[lastI], Math.round(sum / n), d ? Math.round(d[lastI]) : 0]);
+  return JSON.stringify(out);
 }
 
 /* ---------------- アプリへ返す ---------------- */
+
+/**
+ * 一覧用の心拍まとめ（設定に依存しない形）
+ *   h: 心拍 2bpm ごとの滞在秒 { "150": 320, ... }（ゾーン計算はアプリ側で）
+ *   dr: 心拍ドリフト%（前半と後半で「心拍あたりの速さ」がどれだけ落ちたか。30分以上のみ）
+ */
+function hrSummary_(raw) {
+  if (!raw || raw === '-') return null;
+  let p;
+  try { p = JSON.parse(raw); } catch (e) { return null; }
+  if (!p.length) return null;
+  const h = {};
+  for (let i = 1; i < p.length; i++) {
+    const dt = p[i][0] - p[i - 1][0];
+    if (dt <= 0 || dt > 120 || !p[i][1]) continue;
+    const k = String(Math.floor(p[i][1] / 2) * 2);
+    h[k] = (h[k] || 0) + dt;
+  }
+  let dr = null;
+  const T = p[p.length - 1][0];
+  if (T >= 1800) {
+    const s0 = T * 0.1, mid = s0 + (T - s0) / 2;
+    const half = (a, b) => {
+      const q = p.filter(x => x[0] >= a && x[0] <= b);
+      if (q.length < 3) return null;
+      const hr = q.reduce((s, x) => s + x[1], 0) / q.length;
+      return (q[q.length - 1][2] - q[0][2]) / (q[q.length - 1][0] - q[0][0]) / hr;
+    };
+    const a = half(s0, mid), b = half(mid, T);
+    if (a && b) dr = Math.round((a - b) / a * 1000) / 10;
+  }
+  return { h: h, dr: dr };
+}
 
 function load_() {
   const sh = actSheet_();
@@ -326,6 +403,7 @@ function load_() {
     gear: r[12] || null, tm: r[14] === true, wt: r[15] === '' ? null : Number(r[15]),
     suffer: r[16] === '' ? null : Number(r[16]), cal: Number(r[17]) || null, det: r[18] === true,
     splits: r[19] ? JSON.parse(r[19]) : null, efforts: r[20] ? JSON.parse(r[20]) : null,
+    hz: hrSummary_(r[21]),
   })) : [];
   const gsh = gearSheet_();
   const gear = gsh.getLastRow() > 1 ? gsh.getRange(2, 1, gsh.getLastRow() - 1, GEAR_HEAD.length).getValues()

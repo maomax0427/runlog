@@ -201,12 +201,19 @@
     const Y = y => spec.invert ? T + (y - y0) / (y1 - y0) * (h - T - B) : h - B - (y - y0) / (y1 - y0) * (h - T - B);
     let g = '';
     ticks.forEach(v => { const y = Y(v); if (y < T - 1 || y > h - B + 1) return; g += '<line class="gl" x1="' + L + '" x2="' + (w - R) + '" y1="' + y + '" y2="' + y + '"/><text class="ax" x="' + (L - 6) + '" y="' + (y + 3.5) + '" text-anchor="end">' + esc(spec.yFmt ? spec.yFmt(v) : v) + '</text>'; });
+    if (spec.xNum) {
+      niceTicks(x0, x1, Math.max(3, Math.floor((w - L) / 60))).forEach(v => { if (v < x0 || v > x1) return; g += '<text class="ax" x="' + X(v) + '" y="' + (h - 5) + '" text-anchor="middle">' + esc(spec.xNum(v)) + '</text>'; });
+    }
     // x 軸：月の頭
     const months = [];
     const d = new Date(x0); d.setDate(1); d.setHours(0, 0, 0, 0); d.setMonth(d.getMonth() + 1);
-    for (; d.getTime() <= x1; d.setMonth(d.getMonth() + 1)) months.push(d.getTime());
+    if (!spec.xNum) for (; d.getTime() <= x1; d.setMonth(d.getMonth() + 1)) months.push(d.getTime());
     const every = Math.max(1, Math.ceil(months.length / Math.max(2, Math.floor((w - L) / 56))));
     months.forEach((m, i) => { if (i % every) return; const md = new Date(m); g += '<text class="ax" x="' + X(m) + '" y="' + (h - 5) + '" text-anchor="middle">' + (md.getMonth() === 0 ? md.getFullYear() + '/' : '') + (md.getMonth() + 1) + '月</text>'; });
+    (spec.bands || []).forEach(b => {
+      const ya = Y(Math.max(y0, Math.min(y1, b.from))), yb = Y(Math.max(y0, Math.min(y1, b.to)));
+      if (Math.abs(ya - yb) > 0.5) g += '<rect class="band ' + b.cls + '" x="' + L + '" width="' + (w - L - R) + '" y="' + Math.min(ya, yb) + '" height="' + Math.abs(ya - yb) + '"/>';
+    });
     (spec.extra || []).forEach(p => { if (p.y != null) g += '<circle class="dot" cx="' + X(p.x) + '" cy="' + Y(p.y) + '" r="3"/>'; });
     spec.series.forEach(s => {
       const pts = s.pts.filter(p => p.y != null);
@@ -245,18 +252,30 @@
     const L = 34, R = 6, T = 10, B = 22;
     const bars = spec.bars;
     const ro = document.getElementById(id + '-r');
-    const max = Math.max(spec.goal || 0, ...bars.map(b => b.v), 1) * 1.1;
+    const max = spec.max || Math.max(spec.goal || 0, ...bars.map(b => b.v), 1) * 1.1;
     const ticks = niceTicks(0, max, 3);
     const Y = v => h - B - v / max * (h - T - B);
     const bw = (w - L - R) / bars.length;
     const gap = Math.min(6, Math.max(2, bw * 0.25));
     let g = '';
-    ticks.forEach(v => { const y = Y(v); g += '<line class="gl" x1="' + L + '" x2="' + (w - R) + '" y1="' + y + '" y2="' + y + '"/><text class="ax" x="' + (L - 6) + '" y="' + (y + 3.5) + '" text-anchor="end">' + v + '</text>'; });
+    ticks.forEach(v => { const y = Y(v); if (y < T - 1) return; g += '<line class="gl" x1="' + L + '" x2="' + (w - R) + '" y1="' + y + '" y2="' + y + '"/><text class="ax" x="' + (L - 6) + '" y="' + (y + 3.5) + '" text-anchor="end">' + esc(spec.yFmt ? spec.yFmt(v) : v) + '</text>'; });
     const every = Math.max(1, Math.ceil(bars.length / Math.floor((w - L) / 36)));
     bars.forEach((b, i) => {
       const x = L + i * bw + gap / 2, bwid = Math.max(1, bw - gap), y = Y(b.v), hh = h - B - y;
       const rr = Math.min(4, bwid / 2, hh);
-      if (b.v > 0) g += '<path class="bar" data-i="' + i + '" d="M' + x + ',' + (h - B) + 'V' + (y + rr) + 'Q' + x + ',' + y + ' ' + (x + rr) + ',' + y + 'H' + (x + bwid - rr) + 'Q' + (x + bwid) + ',' + y + ' ' + (x + bwid) + ',' + (y + rr) + 'V' + (h - B) + 'Z"/>';
+      if (b.stack) {
+        // 下から順に積む。区切りに 2px のすき間、いちばん上だけ角丸
+        let base = h - B;
+        const top = b.stack.reduce((k, v, j) => (v > 0 ? j : k), -1);
+        b.stack.forEach((v, j) => {
+          if (v <= 0) return;
+          const hh2 = v / max * (h - T - B);
+          const yy = base - hh2, gapv = j === top ? 0 : Math.min(2, hh2 / 3);
+          const r2 = j === top ? Math.min(4, bwid / 2, hh2) : 0;
+          g += '<path class="bar s' + j + '" data-i="' + i + '" d="M' + x + ',' + base + 'V' + (yy + r2 + gapv) + 'Q' + x + ',' + (yy + gapv) + ' ' + (x + r2) + ',' + (yy + gapv) + 'H' + (x + bwid - r2) + 'Q' + (x + bwid) + ',' + (yy + gapv) + ' ' + (x + bwid) + ',' + (yy + r2 + gapv) + 'V' + base + 'Z"/>';
+          base = yy;
+        });
+      } else if (b.v > 0) g += '<path class="bar" data-i="' + i + '" d="M' + x + ',' + (h - B) + 'V' + (y + rr) + 'Q' + x + ',' + y + ' ' + (x + rr) + ',' + y + 'H' + (x + bwid - rr) + 'Q' + (x + bwid) + ',' + y + ' ' + (x + bwid) + ',' + (y + rr) + 'V' + (h - B) + 'Z"/>';
       if ((bars.length - 1 - i) % every === 0) g += '<text class="ax" x="' + (x + bwid / 2) + '" y="' + (h - 5) + '" text-anchor="middle">' + esc(b.label) + '</text>';
     });
     if (spec.goal) g += '<line class="goal" x1="' + L + '" x2="' + (w - R) + '" y1="' + Y(spec.goal) + '" y2="' + Y(spec.goal) + '"/>';
@@ -420,6 +439,7 @@
         (a.hr ? '<div class="eff-row"><span>心拍の余力の使用率</span><b>' + Math.round(M.hrr(a.hr, d.P) * 100) + '%</b></div>' : '') +
         '<div class="eff-row"><span>シューズ</span><b>' + esc(g || '未設定') + '</b></div></div>';
     }
+    if (run && a.hr) h += '<div id="hr-sec"><div class="sec-h"><span>心拍の推移</span></div><div class="card pad"><p class="hint" style="margin:0">読み込み中…</p></div></div>';
     if (a.splits && a.splits.length) {
       const ps = a.splits.map(s => s[0] > 100 ? s[1] / s[0] * 1000 : null);
       const valid = ps.filter(Boolean);
@@ -439,8 +459,48 @@
       h += '<p class="hint">ラップと区間ベストは順番に取り込み中です（1時間ごとに自動）。</p>';
     }
     if (!S.data.demo) h += '<p style="text-align:center;margin-top:18px"><a class="link" href="https://www.strava.com/activities/' + encodeURIComponent(a.id) + '" target="_blank" rel="noopener">Strava で開く</a></p>';
+    const sheetFor = a.id;
+    setTimeout(() => loadStream(a).then(hrs => { if ($('#hr-sec') && S.openRun === sheetFor) { $('#hr-sec').innerHTML = hrSection(a, hrs); drawCharts(); } }), 0);
+    S.openRun = a.id;
     openSheet(esc(a.name || 'ラン'), fmtYmd(M.t(a)) + '（' + W[new Date(a.date).getDay()] + '） ' + new Date(a.date).getHours() + ':' + String(new Date(a.date).getMinutes()).padStart(2, '0'), h);
   }
+
+  // 心拍の推移は重いので、詳細を開いたときだけ取りに行く
+  const streamCache = {};
+  async function loadStream(a) {
+    if (a.hrs) return a.hrs;
+    if (streamCache[a.id] !== undefined) return streamCache[a.id];
+    if (!S.api) return null;
+    try { const j = await api('stream', { id: a.id }); streamCache[a.id] = j.hrs; return j.hrs; } catch (e) { return null; }
+  }
+  const zoneLegend = () => M.ZONES.map((z, j) => '<span><i class="zs s' + j + '"></i>' + z.n + '</span>').join('');
+  function zoneTable(sec, P) {
+    const tot = sec.reduce((x, y) => x + y, 0) || 1;
+    const b = M.zoneBpm(P);
+    return '<div class="zbar">' + sec.map((v, j) => v > 0 ? '<i class="s' + j + '" style="flex:' + v + '"></i>' : '').join('') + '</div>' +
+      M.ZONES.map((z, j) => '<div class="zrow"><span><i class="zs s' + j + '"></i><b>' + z.n + '</b> ' + z.name + '<small>' + (j === 0 ? '〜' + (b[0] - 1) : j === 4 ? b[3] + '〜' : b[j - 1] + '〜' + (b[j] - 1)) + ' bpm</small></span><span class="num">' + M.fmtDur(sec[j], true) + '<small>' + Math.round(sec[j] / tot * 100) + '%</small></span></div>').join('');
+  }
+  function hrSection(a, hrs) {
+    const d = derive();
+    if (!hrs || hrs.length < 3) return '<div class="sec-h"><span>心拍の推移</span></div><div class="card pad"><p class="hint" style="margin:0">' + (a.hz === null && !S.data.demo ? 'このランの心拍の推移はまだ取り込まれていません（1時間ごとに順番に取得）。' : '心拍の推移はありません。') + '</p></div>';
+    const b = M.zoneBpm(d.P);
+    const bands = [{ from: 0, to: b[0], cls: 's0' }, { from: b[0], to: b[1], cls: 's1' }, { from: b[1], to: b[2], cls: 's2' }, { from: b[2], to: b[3], cls: 's3' }, { from: b[3], to: 250, cls: 's4' }];
+    const pts = hrs.map(p => ({ x: p[2] / 1000, y: p[1], t: p[0] }));
+    const pace = M.paceStream(hrs, 90);
+    const ppts = hrs.map((p, i) => ({ x: p[2] / 1000, y: pace[i] && pace[i] < 900 && pace[i] > 150 ? pace[i] : null, t: p[0] }));
+    const hz = a.hz || M.hrSummary(hrs);
+    const sec = M.zoneSec(hz, d.P);
+    const zname = y => M.ZONES[M.zoneOf(y, b)].n;
+    let h = '<div class="sec-h"><span>心拍の推移</span><span>帯の色 = 心拍ゾーン</span></div><div class="card pad">' +
+      chartBox('ch-hr', { xNum: v => v + 'km', x0: 0, bands: bands, series: [{ pts: pts }], yFmt: v => v.toFixed(0),
+        readout: p => '<b>' + p.y + ' bpm</b><span>' + zname(p.y) + ' · ' + p.x.toFixed(2) + 'km · ' + M.fmtDur(p.t) + '</span>' }, 160) +
+      (ppts.some(p => p.y) ? '<div style="margin-top:10px"></div>' + chartBox('ch-hrpace', { xNum: v => v + 'km', x0: 0, invert: true, series: [{ pts: ppts }], yFmt: M.fmtPace,
+        readout: p => '<b>' + M.fmtPace(p.y) + ' /km</b><span>ペース · ' + p.x.toFixed(2) + 'km</span>' }, 120) : '') +
+      (hz && hz.dr != null && a.wt !== 3 ? '<div class="drift"><span>心拍ドリフト</span><b>' + hz.dr.toFixed(1) + '%</b><span class="muted">' + driftLabel(hz.dr) + '</span></div>' : '') +
+      '</div><div class="sec-h"><span>心拍ゾーン別の時間</span><button class="link" data-act="explain" data-k="zone">ゾーンとは</button></div><div class="card pad">' + zoneTable(sec, d.P) + '</div>';
+    return h;
+  }
+  const driftLabel = v => v < 5 ? '後半も心拍が安定。有酸素の土台◎' : v < 10 ? '後半にやや心拍が上昇' : '後半に心拍が大きく上昇。ペースか距離が今の土台より上';
 
   /* ---------------- 成長 ---------------- */
   function vGrowth() {
@@ -499,6 +559,38 @@
         '<div class="kpi" style="box-shadow:none;background:var(--field)"><b>' + (efPts.length > 8 ? (paceAt(first) - paceAt(last) >= 0 ? '−' : '+') + Math.abs(Math.round(paceAt(first) - paceAt(last))) + '<small>秒</small>' : '–') + '</b><span>期間のはじめから</span></div></div>' +
         chartBox('ch-ef', { series: [{ pts: efPts.map((p, i) => ({ x: p.x, y: sm[i], a: p.a })) }], extra: efPts, yFmt: v => v.toFixed(2),
           readout: p => '<b>' + p.y.toFixed(2) + ' m/拍</b><span>' + fmtYmd(p.x) + ' · 心拍' + ref + 'なら ' + M.fmtPace(paceAt(p.y)) + '/km</span>' }) + '</div>';
+    }
+
+    // 心拍ゾーンの割合
+    const withHz = runs.filter(a => a.hz && a.hz.h);
+    if (withHz.length) {
+      const zb = M.buckets(withHz, unit, from, now).map(bk => {
+        const sec = [0, 0, 0, 0, 0];
+        bk.runs.forEach(a => M.zoneSec(a.hz, d.P).forEach((v, j) => { sec[j] += v; }));
+        return Object.assign(bk, { sec: sec });
+      });
+      const totSec = [0, 0, 0, 0, 0];
+      zb.forEach(bk => bk.sec.forEach((v, j) => { totSec[j] += v; }));
+      const all = totSec.reduce((x, y) => x + y, 0) || 1;
+      const easy = Math.round((totSec[0] + totSec[1]) / all * 100);
+      h += '<div class="sec-h"><span>心拍ゾーン別の時間</span><button class="link" data-act="explain" data-k="zone">?</button></div><div class="card pad">' +
+        '<div class="kpis two" style="margin-bottom:6px"><div class="kpi" style="box-shadow:none;background:var(--field)"><b>' + easy + '<small>%</small></b><span>楽な強度（Z1–2）の割合</span></div>' +
+        '<div class="kpi" style="box-shadow:none;background:var(--field)"><b>' + Math.round((totSec[3] + totSec[4]) / all * 100) + '<small>%</small></b><span>きつい強度（Z4–5）</span></div></div>' +
+        chartBox('ch-zone', { bars: zb.map(bk => { const dd = new Date(bk.k); return { v: bk.sec.reduce((x, y) => x + y, 0) / 3600, stack: bk.sec.map(v => v / 3600), label: unit === 'week' ? (dd.getMonth() + 1) + '/' + dd.getDate() : (dd.getMonth() + 1) + '月', b: bk }; }),
+          yFmt: v => v ? v + '時間' : '0',
+          readout: x => '<span>' + (unit === 'week' ? fmtYmd(x.b.k) + 'の週' : (new Date(x.b.k).getMonth() + 1) + '月') + '</span>' + x.b.sec.map((v, j) => '<span>' + M.ZONES[j].n + ' <b style="font-size:14px">' + Math.round(v / 60) + '</b>分</span>').join('') }, 150) +
+        '<div class="legend">' + zoneLegend() + '</div>' +
+        '<p class="hint">強くなるランナーの多くは、時間の約8割を楽な強度（Z1–2）で走っています。いまは ' + easy + '%。</p></div>';
+    }
+
+    // 心拍ドリフト
+    const drPts = runs.filter(a => a.hz && a.hz.dr != null && a.wt !== 3).map(a => ({ x: M.t(a), y: a.hz.dr, a: a }));
+    if (drPts.length > 2) {
+      const sm = M.rolling(drPts.map(p => p.y), 6);
+      h += '<div class="sec-h"><span>心拍ドリフト（30分以上のラン）</span><span>下ほど良い</span></div><div class="card pad">' +
+        chartBox('ch-drift', { invert: true, series: [{ pts: drPts.map((p, i) => ({ x: p.x, y: sm[i], a: p.a })) }], extra: drPts, yFmt: v => v.toFixed(0) + '%',
+          readout: p => '<b>' + p.y.toFixed(1) + '%</b><span>' + fmtYmd(p.x) + ' · ' + esc(p.a.name) + ' ' + M.fmtKm(p.a.km) + 'km</span>' }) +
+        '<p class="hint">一定のペースで走っても、後半は心拍がじわじわ上がります。その上がり方が小さくなるほど、長く走れる持久力がついた証拠。5%未満が目安です（インターバルなどは除外）。</p></div>';
     }
 
     // 体力と疲労
@@ -622,7 +714,13 @@
   function explain(k) {
     const P = derive().P;
     let h = '<div class="card pad explain">';
-    if (k === 'form') {
+    if (k === 'zone') {
+      const b = M.zoneBpm(P);
+      h += '<p>心拍ゾーンは、<b>安静時心拍</b>と<b>最大心拍</b>のあいだを5段階に分けたものです（カルボーネン法）。いまの設定（安静時 ' + P.rest + ' / 最大 ' + P.max + '）では:</p>' +
+        M.ZONES.map((z, j) => '<p><b>' + z.n + ' ' + z.name + '</b>（' + (j === 0 ? '〜' + (b[0] - 1) : j === 4 ? b[3] + '〜' : b[j - 1] + '〜' + (b[j] - 1)) + ' bpm）<br>' + z.d + '</p>').join('') +
+        '<p><b>心拍ドリフト</b>は、ランの前半と後半で「心拍1拍あたりの速さ」がどれだけ落ちたかです。5%未満なら、その距離・ペースを有酸素でこなせています。</p>' +
+        '<p class="muted">心拍は Apple Watch などで記録されたものを Strava 経由で取り込んでいます。</p>';
+    } else if (k === 'form') {
       h += '<p><b>トレーニング負荷</b>は、走った時間と心拍の高さから計算します（TRIMP）。心拍が高いほど、同じ時間でも負荷は大きくなります。</p>' +
         '<p><b>体力</b>は過去6週間ほどの負荷の積み上げ、<b>疲労</b>は直近1週間の負荷です。</p>' +
         '<p><b>調子</b> = 体力 − 疲労。マイナスが大きいほど疲れがたまっていて、プラスなら疲れが抜けてフレッシュな状態です。レース前に練習量を落として調子をプラスにするのが「テーパリング」です。</p>' +
@@ -635,7 +733,7 @@
         '<p>精度は<b>最大心拍数</b>と<b>安静時心拍数</b>で大きく変わります。いまは最大 ' + P.max + (P.auto ? '（記録からの自動推定）' : '') + '、安静時 ' + P.rest + ' で計算しています。設定から変えられます。</p>' +
         '<p class="muted">光学式の心拍計（腕時計）は走りはじめの数分がずれやすく、短いランは計算から除いています（15分未満・2km未満）。</p>';
     }
-    openSheet(k === 'form' ? '体力・疲労・調子' : '指標の見かた', '', h + '</div>');
+    openSheet(k === 'form' ? '体力・疲労・調子' : k === 'zone' ? '心拍ゾーン' : '指標の見かた', '', h + '</div>');
   }
 
   /* ---------------- 描画 ---------------- */

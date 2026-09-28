@@ -65,7 +65,21 @@
       addE('400m', 400, fast * 0.97); addE('1/2 mile', 805, fast * 0.98); addE('1K', 1000, fast); addE('1 mile', 1609, fast * 1.005);
       addE('2 mile', 3219, kind === 'interval' ? 0.95 : 0.99); addE('5K', 5000, kind === 'interval' ? 0.97 : 0.995);
       addE('10K', 10000, 0.998); addE('15K', 15000, 1); addE('10 mile', 16093, 1); addE('20K', 20000, 1); addE('Half-Marathon', 21097, 1);
+      // 心拍の推移（10秒ごと）: 立ち上がり → 巡航 → 後半にじわじわ上がる
+      const hrs = [];
+      const target = hr - (HRMAX - REST) * drift / 2;
+      let dist = 0, cur = 92;
+      for (let ts = 0; ts <= mt; ts += 10) {
+        const si = Math.min(splits.length - 1, Math.floor(dist / 1000));
+        const sp = splits[si][1] / splits[si][0];
+        const intv = kind === 'interval' && si >= 2 && si < 7;
+        const goal = target + (HRMAX - REST) * drift * ts / mt + (intv ? 12 : 0) + (race ? ts / mt * 8 : 0);
+        cur += (goal - cur) * (1 - Math.exp(-10 / (intv ? 25 : 70)));
+        hrs.push([ts, Math.round(cur + rand(-1.5, 1.5)), Math.round(dist)]);
+        dist += 10 / sp;
+      }
       acts.push({
+        hrs: hrs, hz: M.hrSummary(hrs),
         id: String(id++), date: iso(day, hour, Math.floor(rand(0, 50))), name: name, type: 'Run', km: Math.round(km * 1000) / 1000,
         mt: mt, et: Math.round(mt * (race ? 1.001 : rand(1.02, 1.1))), elev: Math.round(elev), hr: hr,
         hrMax: Math.min(HRMAX, Math.round(hr + (race ? 12 : rand(8, 20)))), cad: Math.round(rand(164, 176) + d / 60), gear: shoe,

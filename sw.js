@@ -1,5 +1,5 @@
 // アプリ本体をキャッシュして、電波が弱くても起動できるようにする。
-const CACHE = 'runlog-v1';
+const CACHE = 'runlog-v2';
 const SHELL = ['./', 'index.html', 'style.css', 'metrics.js', 'demo.js', 'app.js', 'manifest.webmanifest', 'icons/apple-touch-icon.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
